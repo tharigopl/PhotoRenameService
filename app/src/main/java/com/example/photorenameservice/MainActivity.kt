@@ -18,7 +18,12 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.exifinterface.media.ExifInterface
+import android.location.Geocoder
 import androidx.annotation.RequiresApi
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
@@ -35,11 +40,17 @@ class MainActivity : AppCompatActivity() {
     ) { result ->
         Log.d(TAG, "Permission result: ${result.resultCode}")
         if (result.resultCode == RESULT_OK) {
-            binding.tvStatus.text = "Permission granted - photo renamed"
-            Toast.makeText(this, "Permission granted", Toast.LENGTH_SHORT).show()
+            binding.tvStatus.text = "Permission granted - completing rename..."
+            Toast.makeText(this, "Permission granted - renaming photo...", Toast.LENGTH_SHORT).show()
+
+            // Complete the rename operation that was interrupted
+            completePhotoRename()
         } else {
             binding.tvStatus.text = "Permission denied"
             Toast.makeText(this, "Permission denied", Toast.LENGTH_SHORT).show()
+
+            // Clear the pending URI when permission is denied
+            PhotoRenameService.pendingUri = null
         }
     }
 
@@ -158,9 +169,9 @@ class MainActivity : AppCompatActivity() {
                             androidx.activity.result.IntentSenderRequest.Builder(permissionIntent.intentSender).build()
                         )
 
-                        // Clear the global permission intent after using it
+                        // Clear only the permission intent after using it, but keep the URI for later
                         PhotoRenameService.pendingPermissionIntent = null
-                        PhotoRenameService.pendingUri = null
+                        // DON'T clear pendingUri here - we need it after permission is granted
 
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to launch permission intent", e)
@@ -411,5 +422,101 @@ class MainActivity : AppCompatActivity() {
         handlePermissionRequest()
 
         Toast.makeText(this, "Tested notification intent handling", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun completePhotoRename() {
+        Log.d(TAG, "=== Completing Photo Rename ===")
+
+        // Get the URI from the global storage
+        val uri = PhotoRenameService.pendingUri
+
+        if (uri == null) {
+            Log.e(TAG, "No pending URI found for rename")
+            binding.tvStatus.text = "No photo to rename"
+            return
+        }
+
+        Log.d(TAG, "Completing rename for URI: $uri")
+
+        try {
+            // Read EXIF data for location
+            var lat: Double? = null
+            var lon: Double? = null
+            contentResolver.openInputStream(uri)?.use { stream ->
+                androidx.exifinterface.media.ExifInterface(stream).latLong?.let { coords ->
+                    lat = coords[0]
+                    lon = coords[1]
+                }
+            }
+
+            val place = if (lat != null && lon != null) {
+                try {
+                    android.location.Geocoder(this, java.util.Locale.getDefault())
+                        .getFromLocation(lat!!, lon!!, 1)
+                        ?.firstOrNull()
+                        ?.let { addr ->
+                            listOfNotNull(addr.locality, addr.countryName)
+                                .joinToString("_") { it.replace(" ", "") }
+                        } ?: "Unknown"
+                } catch (e: Exception) {
+                    Log.w(TAG, "Geocoding failed", e)
+                    "Unknown"
+                }
+            } else "NoGeo"
+
+            // Get original filename for extension
+            val originalName = contentResolver.query(
+                uri,
+                arrayOf(MediaStore.Images.Media.DISPLAY_NAME),
+                null, null, null
+            )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+
+            Log.d(TAG, "Original Name: $originalName")
+
+            val extension = originalName?.substringAfterLast('.') ?: "jpg"
+
+            // Get date taken
+            val dateTaken = contentResolver.query(
+                uri,
+                arrayOf(MediaStore.Images.Media.DATE_TAKEN),
+                null, null, null
+            )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null } ?: System.currentTimeMillis()
+
+            val dt = java.util.Date(dateTaken)
+            val fmt = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(dt)
+            val year = java.text.SimpleDateFormat("yyyy", java.util.Locale.US).format(dt)
+            val month = java.text.SimpleDateFormat("MM", java.util.Locale.US).format(dt)
+            val day = java.text.SimpleDateFormat("dd", java.util.Locale.US).format(dt)
+            val newName = "${fmt}_${place}.${extension}"
+
+            Log.d(TAG, "New Name: $newName")
+
+            val cv = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, newName)
+                // Only set relative path on Android Q+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera/$year/$month/$day")
+                }
+            }
+
+            val updated = contentResolver.update(uri, cv, null, null)
+            Log.d(TAG, "Rename completed successfully (updated: $updated)")
+
+            // Clear the pending URI after successful rename
+            PhotoRenameService.pendingUri = null
+
+            binding.tvStatus.text = "Photo renamed to: $newName"
+            Toast.makeText(this, "Photo renamed successfully!", Toast.LENGTH_LONG).show()
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to complete photo rename", e)
+            binding.tvStatus.text = "Failed to rename photo"
+            Toast.makeText(this, "Failed to rename: ${e.message}", Toast.LENGTH_LONG).show()
+
+            // Clear the pending URI even on failure to avoid retrying
+            PhotoRenameService.pendingUri = null
+        }
+
+        Log.d(TAG, "=== End Complete Photo Rename ===")
     }
 }

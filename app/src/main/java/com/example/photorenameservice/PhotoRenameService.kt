@@ -28,6 +28,10 @@ class PhotoRenameService : Service() {
     private val tag = "PhotoRenameService"
     private val PERMISSION_REQUEST_NOTIFICATION_ID = 1001
 
+    // Track processed images to avoid infinite loops
+    private val processedImages = mutableSetOf<Long>()
+    private val maxProcessedImages = 100 // Limit cache size
+
     companion object {
         // Store pending permission requests globally
         var pendingPermissionIntent: PendingIntent? = null
@@ -246,6 +250,14 @@ class PhotoRenameService : Service() {
         try {
             Log.d(tag, "Processing URI: $uri")
 
+            // Extract image ID from URI to check if already processed
+            val imageId = ContentUris.parseId(uri)
+
+            if (processedImages.contains(imageId)) {
+                Log.d(tag, "Image ID $imageId already processed, skipping to avoid loop")
+                return
+            }
+
             // Add debug to see what's available
             debugMediaStoreColumns(uri)
 
@@ -258,6 +270,16 @@ class PhotoRenameService : Service() {
             }
 
             Log.d(tag, "Confirmed camera image, processing...")
+
+            // Mark as processed BEFORE attempting rename to prevent loops
+            processedImages.add(imageId)
+
+            // Clean up cache if it gets too large
+            if (processedImages.size > maxProcessedImages) {
+                val toRemove = processedImages.take(processedImages.size - maxProcessedImages)
+                processedImages.removeAll(toRemove.toSet())
+                Log.d(tag, "Cleaned up processed images cache")
+            }
 
             // Continue with EXIF and renaming logic
             processImageRename(uri)
@@ -596,6 +618,7 @@ class PhotoRenameService : Service() {
             }
         }
     }
+
 
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun storePendingPermissionRequest(uri: Uri, securityEx: android.app.RecoverableSecurityException) {
