@@ -42,12 +42,6 @@ class PhotoRenameService : Service() {
         // Check permissions and MediaStore access
         checkPermissionsAndMediaStore()
 
-        // Create a test image if no images exist
-        //createTestImage()
-
-        // Start monitoring MediaStore for changes
-        //startMediaStoreMonitoring()
-
         // Register the observer
         registerContentObserver()
 
@@ -99,96 +93,6 @@ class PhotoRenameService : Service() {
         }
     }
 
-    private fun startMediaStoreMonitoring() {
-        Log.d(tag, "=== Starting MediaStore Monitoring ===")
-
-        // Monitor every 5 seconds to see if new images appear
-        val handler = Handler(Looper.getMainLooper())
-        var lastCount = 0
-
-        val runnable = object : Runnable {
-            override fun run() {
-                try {
-                    val cursor = contentResolver.query(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        arrayOf(MediaStore.Images.Media._ID),
-                        null,
-                        null,
-                        "${MediaStore.Images.Media.DATE_ADDED} DESC"
-                    )
-
-                    val currentCount = cursor?.count ?: 0
-                    cursor?.close()
-
-                    if (currentCount != lastCount) {
-                        Log.d(tag, "MediaStore image count changed: $lastCount -> $currentCount")
-                        lastCount = currentCount
-
-                        if (currentCount > 0) {
-                            Log.d(tag, "Found images! Querying latest...")
-                            queryLatestImage()
-                        }
-                    }
-
-                    // Schedule next check
-                    handler.postDelayed(this, 5000)
-
-                } catch (e: Exception) {
-                    Log.e(tag, "Error monitoring MediaStore", e)
-                }
-            }
-        }
-
-        handler.post(runnable)
-    }
-
-    private fun createTestImage() {
-        Log.d(tag, "=== Creating Test Image ===")
-
-        try {
-            // Create a simple bitmap
-            val bitmap = android.graphics.Bitmap.createBitmap(100, 100, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawColor(android.graphics.Color.RED)
-
-            // Prepare values for MediaStore
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, "test_image_${System.currentTimeMillis()}.jpg")
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(MediaStore.Images.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
-                put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
-                }
-            }
-
-            // Insert into MediaStore
-            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-
-            if (uri != null) {
-                Log.d(tag, "Created test image with URI: $uri")
-
-                // Write the bitmap to the URI
-                contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 100, outputStream)
-                    Log.d(tag, "Successfully saved test image")
-                }
-
-                // Try to query it immediately
-                debugMediaStoreColumns(uri)
-
-            } else {
-                Log.e(tag, "Failed to create test image URI")
-            }
-
-        } catch (e: Exception) {
-            Log.e(tag, "Error creating test image", e)
-        }
-
-        Log.d(tag, "=== End Create Test Image ===")
-    }
-
     private fun checkPermissionsAndMediaStore() {
         Log.d(tag, "=== Permission and MediaStore Check ===")
 
@@ -229,54 +133,6 @@ class PhotoRenameService : Service() {
         Log.d(tag, "=== End Permission Check ===")
     }
 
-    private fun simpleMediaStoreTest() {
-        Log.d(tag, "=== Simple MediaStore Test ===")
-
-        try {
-            // First, just try to query with basic columns
-            val cursor = contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME),
-                null,
-                null,
-                null
-            )
-
-            if (cursor == null) {
-                Log.e(tag, "Query returned null - no permission or MediaStore not available")
-                return
-            }
-
-            Log.d(tag, "Query successful - found ${cursor.count} images")
-
-            if (cursor.count > 0 && cursor.moveToFirst()) {
-                val id = cursor.getLong(0)
-                val name = cursor.getString(1)
-                Log.d(tag, "First image: ID=$id, Name=$name")
-
-                // Test individual URI
-                val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                Log.d(tag, "Testing URI: $uri")
-
-                // Try to query this specific URI
-                val singleCursor = contentResolver.query(uri, null, null, null, null)
-                if (singleCursor != null) {
-                    Log.d(tag, "Single URI query successful, columns: ${singleCursor.columnNames.size}")
-                    singleCursor.close()
-                } else {
-                    Log.e(tag, "Single URI query failed")
-                }
-            }
-
-            cursor.close()
-
-        } catch (e: Exception) {
-            Log.e(tag, "Simple test failed", e)
-        }
-
-        Log.d(tag, "=== End Simple Test ===")
-    }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             // Main service channel (low importance)
@@ -312,6 +168,7 @@ class PhotoRenameService : Service() {
 
     private fun registerContentObserver() {
         observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            @RequiresApi(Build.VERSION_CODES.Q)
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
 
@@ -339,6 +196,7 @@ class PhotoRenameService : Service() {
         Log.d(tag, "Registered observer for: ${MediaStore.Images.Media.EXTERNAL_CONTENT_URI}")
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun queryRecentImages() {
         Log.d(tag, "Querying recent images as fallback...")
 
@@ -383,93 +241,7 @@ class PhotoRenameService : Service() {
         }
     }
 
-    private fun testMediaStoreAccess() {
-        Log.d(tag, "=== Testing MediaStore Access ===")
-
-        try {
-            val projection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.DATA,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-                MediaStore.Images.Media.DATE_TAKEN,
-                MediaStore.Images.Media.DATE_ADDED
-            )
-
-            // Add RELATIVE_PATH for Android Q+
-            val fullProjection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                projection + MediaStore.Images.Media.RELATIVE_PATH
-            } else {
-                projection
-            }
-
-            val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC LIMIT 5"
-
-            contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                fullProjection,
-                null,
-                null,
-                sortOrder
-            )?.use { cursor ->
-                Log.d(tag, "MediaStore query successful - found ${cursor.count} images")
-
-                if (cursor.count > 0) {
-                    Log.d(tag, "Available columns: ${cursor.columnNames.joinToString(", ")}")
-
-                    var index = 0
-                    while (cursor.moveToNext() && index < 3) {
-                        val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
-                        val name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
-                        val data = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA))
-                        val bucket = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME))
-                        val dateTaken = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN))
-                        val dateAdded = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED))
-
-                        Log.d(tag, "Image $index:")
-                        Log.d(tag, "  ID: $id")
-                        Log.d(tag, "  Name: $name")
-                        Log.d(tag, "  Data: $data")
-                        Log.d(tag, "  Bucket: $bucket")
-                        Log.d(tag, "  Date Taken: $dateTaken")
-                        Log.d(tag, "  Date Added: $dateAdded")
-
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            try {
-                                val relativePath = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Images.Media.RELATIVE_PATH))
-                                Log.d(tag, "  Relative Path: $relativePath")
-                            } catch (e: Exception) {
-                                Log.d(tag, "  Relative Path: <not available>")
-                            }
-                        }
-
-                        // Test individual URI access
-                        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                        Log.d(tag, "  URI: $uri")
-
-                        // Test if we can query this specific URI
-                        try {
-                            contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)?.use {
-                                Log.d(tag, "  ✓ URI query successful")
-                            } ?: Log.d(tag, "  ✗ URI query returned null")
-                        } catch (e: Exception) {
-                            Log.d(tag, "  ✗ URI query failed: ${e.message}")
-                        }
-
-                        index++
-                    }
-                } else {
-                    Log.w(tag, "No images found in MediaStore")
-                }
-            } ?: Log.e(tag, "MediaStore query returned null")
-
-        } catch (e: Exception) {
-            Log.e(tag, "Error testing MediaStore access", e)
-        }
-
-        Log.d(tag, "=== End MediaStore Test ===")
-    }
-
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun handleNewImage(uri: Uri) {
         try {
             Log.d(tag, "Processing URI: $uri")
@@ -610,7 +382,6 @@ class PhotoRenameService : Service() {
         }
 
         // Method 4: Check if it's from the default camera app (last resort)
-        // This is a fallback for emulators that might not have proper folder structure
         val isFromCamera = checkIfFromCameraApp(uri)
         if (isFromCamera) {
             Log.d(tag, "Camera image detected via camera app check")
@@ -643,6 +414,7 @@ class PhotoRenameService : Service() {
         return false
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun processImageRename(uri: Uri) {
         try {
             // Read EXIF
@@ -723,6 +495,7 @@ class PhotoRenameService : Service() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun showPermissionNotification(uri: Uri, securityEx: android.app.RecoverableSecurityException) {
         try {
             Log.d(tag, "=== Showing Permission Notification ===")
@@ -740,15 +513,17 @@ class PhotoRenameService : Service() {
 
             // Create an intent that will launch the permission dialog
             val permissionIntent = Intent(this, MainActivity::class.java).apply {
-                action = "REQUEST_PERMISSION"
+                action = "com.example.photorenameservice.REQUEST_PERMISSION"  // Use a unique action
                 putExtra("URI", uri.toString())
                 putExtra("TIMESTAMP", System.currentTimeMillis())
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)  // Prevent multiple instances
             }
 
             val pendingIntent = PendingIntent.getActivity(
                 this,
-                PERMISSION_REQUEST_NOTIFICATION_ID,
+                System.currentTimeMillis().toInt(), // Use unique request code
                 permissionIntent,
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -799,6 +574,7 @@ class PhotoRenameService : Service() {
             notificationManager.notify(PERMISSION_REQUEST_NOTIFICATION_ID, notification)
 
             Log.d(tag, "Permission notification posted with ID: $PERMISSION_REQUEST_NOTIFICATION_ID")
+
             Log.d(tag, "=== End Permission Notification ===")
 
         } catch (e: Exception) {
@@ -821,6 +597,7 @@ class PhotoRenameService : Service() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun storePendingPermissionRequest(uri: Uri, securityEx: android.app.RecoverableSecurityException) {
         // Store the permission request in shared preferences for later retrieval
         val prefs = getSharedPreferences("pending_permissions", Context.MODE_PRIVATE)
@@ -830,39 +607,6 @@ class PhotoRenameService : Service() {
             .putLong("pending_time", System.currentTimeMillis())
             .apply()
         Log.d(tag, "Stored pending permission request for $uri")
-    }
-
-    private fun getPathFromDataColumn(uri: Uri): String? {
-        return contentResolver.query(
-            uri,
-            arrayOf(MediaStore.Images.Media.DATA),
-            null, null, null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val fullPath = cursor.getString(0)
-                Log.d(tag, "DATA column path: $fullPath")
-
-                // Extract relative path from full path
-                when {
-                    fullPath.contains("DCIM/Camera") -> {
-                        val startIdx = fullPath.indexOf("DCIM/Camera")
-                        fullPath.substring(startIdx)
-                    }
-                    fullPath.contains("DCIM") -> {
-                        val startIdx = fullPath.indexOf("DCIM")
-                        fullPath.substring(startIdx)
-                    }
-                    fullPath.contains("Camera") -> {
-                        val startIdx = fullPath.indexOf("Camera")
-                        "DCIM/${fullPath.substring(startIdx)}"
-                    }
-                    else -> {
-                        Log.d(tag, "Path doesn't contain expected camera folders")
-                        null
-                    }
-                }
-            } else null
-        }
     }
 
     override fun onBind(intent: android.content.Intent?) = null

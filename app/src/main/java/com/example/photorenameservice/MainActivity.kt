@@ -100,6 +100,25 @@ class MainActivity : AppCompatActivity() {
             testManualPermissionRequest()
             true
         }
+
+        // Add test for notification intent
+        binding.btnStop.setOnLongClickListener {
+            testNotificationIntent()
+            true
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        Log.d(TAG, "=== onNewIntent called ===")
+        Log.d(TAG, "New intent: $intent")
+        Log.d(TAG, "New intent action: ${intent?.action}")
+
+        // Update the activity's intent
+        if (intent != null) {
+            setIntent(intent)
+            handlePermissionRequest()
+        }
     }
 
     private fun handlePermissionRequest() {
@@ -117,7 +136,7 @@ class MainActivity : AppCompatActivity() {
 
         // Check if this activity was launched from a permission notification
         when (intent.action) {
-            "REQUEST_PERMISSION" -> {
+            "com.example.photorenameservice.REQUEST_PERMISSION" -> {
                 Log.d(TAG, "Processing permission request...")
 
                 // Get the permission intent from the global storage
@@ -369,5 +388,28 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "Error in manual permission test", e)
             Toast.makeText(this, "Error testing permission: ${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun testNotificationIntent() {
+        Log.d(TAG, "Testing notification intent...")
+
+        // Simulate the same intent that the notification would create
+        val testIntent = Intent(this, MainActivity::class.java).apply {
+            action = "com.example.photorenameservice.REQUEST_PERMISSION"
+            putExtra("URI", "content://media/external/images/media/test123")
+            putExtra("TIMESTAMP", System.currentTimeMillis())
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+
+        // Store a fake permission intent for testing
+        PhotoRenameService.pendingPermissionIntent = null // This will test the "not found" case
+
+        // Process the intent
+        setIntent(testIntent)
+        handlePermissionRequest()
+
+        Toast.makeText(this, "Tested notification intent handling", Toast.LENGTH_SHORT).show()
     }
 }
