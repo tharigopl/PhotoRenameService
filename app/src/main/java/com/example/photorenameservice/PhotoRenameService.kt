@@ -4,6 +4,7 @@ import android.app.*
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.database.ContentObserver
 import android.location.Geocoder
 import android.net.Uri
@@ -25,6 +26,13 @@ import java.util.Locale
 class PhotoRenameService : Service() {
     private lateinit var observer: ContentObserver
     private val tag = "PhotoRenameService"
+    private val PERMISSION_REQUEST_NOTIFICATION_ID = 1001
+
+    companion object {
+        // Store pending permission requests globally
+        var pendingPermissionIntent: PendingIntent? = null
+        var pendingUri: Uri? = null
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -271,13 +279,29 @@ class PhotoRenameService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
+            // Main service channel (low importance)
+            val serviceChannel = NotificationChannel(
                 "photo_organizer_channel",
                 "Photo Rename Service",
                 NotificationManager.IMPORTANCE_LOW
             )
+
+            // Permission request channel (high importance for visibility)
+            val permissionChannel = NotificationChannel(
+                "permission_channel",
+                "Permission Requests",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifications for requesting photo rename permissions"
+                enableVibration(true)
+                enableLights(true)
+            }
+
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(channel)
+            nm.createNotificationChannel(serviceChannel)
+            nm.createNotificationChannel(permissionChannel)
+
+            Log.d(tag, "Notification channels created")
         }
     }
 
@@ -299,14 +323,6 @@ class PhotoRenameService : Service() {
                     Log.w(tag, "URI is null, trying to query all recent images")
                     queryRecentImages()
                     return
-                }
-
-                // Check if URI is valid
-                try {
-                    val exists = DocumentsContract.isDocumentUri(this@PhotoRenameService, uri)
-                    Log.d(tag, "URI is document URI: $exists")
-                } catch (e: Exception) {
-                    Log.d(tag, "Error checking if document URI: ${e.message}")
                 }
 
                 Log.d(tag, "Processing URI: $uri")
@@ -627,7 +643,6 @@ class PhotoRenameService : Service() {
         return false
     }
 
-    @RequiresApi(Build.VERSION_CODES.Q)
     private fun processImageRename(uri: Uri) {
         try {
             // Read EXIF
@@ -693,127 +708,129 @@ class PhotoRenameService : Service() {
             val updated = contentResolver.update(uri, cv, null, null)
             Log.d(tag, "Renamed to $newName (updated: $updated)")
 
-        }
-        catch (securityEx: android.app.RecoverableSecurityException) {
-            Log.w(tag, "RecoverableSecurityException: requesting user consent", securityEx)
-            // Launch system UI to grant permission
-            try {
-                // Extract PendingIntent from RemoteAction and send IntentSender
-                val userAction: RemoteAction = securityEx.userAction
-                val pending: PendingIntent = userAction.actionIntent
-                startIntentSender(
-                    pending.intentSender,
-                    null,
-                    0,
-                    0,
-                    0
-                )
-            } catch (intentEx: Exception) {
-                Log.e(tag, "Failed to launch permission intent", intentEx)
-            }
-        }
-        /*catch (securityEx: android.app.RecoverableSecurityException) {
-            Log.w(tag, "Need user permission to rename", securityEx)
-            val intentSender = securityEx.userAction.actionIntent
-            val notification = NotificationCompat.Builder(this, "photo_organizer_channel")
-                .setContentTitle("Permission required")
-                .setContentText("Tap to grant rename permission")
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
-                .setContentIntent(intentSender)
-                .setAutoCancel(true)
-                .build()
-            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(100, notification)
-        }*/
-        catch (e: Exception) {
+        } catch (securityEx: android.app.RecoverableSecurityException) {
+            Log.w(tag, "=== RecoverableSecurityException ===")
+            Log.w(tag, "Exception message: ${securityEx.message}")
+            Log.w(tag, "User action: ${securityEx.userAction}")
+            Log.w(tag, "Action intent: ${securityEx.userAction.actionIntent}")
+            Log.w(tag, "URI: $uri")
+
+            // Create a notification that will launch the permission dialog
+            showPermissionNotification(uri, securityEx)
+
+        } catch (e: Exception) {
             Log.e(tag, "Failed to rename image", e)
         }
     }
 
-//    @Suppress("DEPRECATION")
-//    private fun handleNewImage(uri: Uri) {
-//        try {
-//            Log.d(tag, "relPath = ####")
-//            var relPath: String? = null
-//
-//            // Only try RELATIVE_PATH on Android Q and above
-//            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-//                relPath = contentResolver.query(
-//                    uri,
-//                    arrayOf(MediaStore.Images.Media.RELATIVE_PATH),
-//                    null, null, null
-//                )?.use { c ->
-//                    if (c.moveToFirst()) {
-//                        val path = c.getString(0)
-//                        Log.d(tag, "RELATIVE_PATH: $path")
-//                        path
-//                    } else null
-//                }
-//            }
-//
-//            // Fallback to DATA column for older versions or when RELATIVE_PATH fails
-//            if (relPath.isNullOrEmpty()) {
-//                relPath = getPathFromDataColumn(uri)
-//            }
-//
-//            if (relPath.isNullOrEmpty()) {
-//                Log.d(tag, "Could not determine path for URI: $uri")
-//                return
-//            }
-//
-//            Log.d(tag, "Final relPath: $relPath")
-//
-//            val safeRelPath = relPath // now guaranteed non-null
-//            if (safeRelPath != null) {
-//                if (!safeRelPath.startsWith("DCIM/Camera")) {
-//                    Log.d(tag, "Skipping non-camera image: $safeRelPath")
-//                    return
-//                }
-//            }
-//            Log.d(tag, "Processing image at path: $safeRelPath")
-//
-//            // Read EXIF
-//            var lat: Double? = null; var lon: Double? = null
-//            contentResolver.openInputStream(uri)?.use { stream: InputStream ->
-//                ExifInterface(stream).latLong?.let { coords -> lat = coords[0]; lon = coords[1] }
-//            }
-//
-//            val place = if (lat != null && lon != null) {
-//                Geocoder(this, Locale.getDefault())
-//                    .getFromLocation(lat!!, lon!!, 1)
-//                    ?.firstOrNull()
-//                    ?.let { addr -> listOfNotNull(addr.locality, addr.countryName)
-//                        .joinToString("_") { it.replace(" ", "") }
-//                    } ?: "Unknown"
-//            } else "NoGeo"
-//
-//            // Corrected dateTaken extraction with else null
-//            val dateTaken = contentResolver.query(
-//                uri,
-//                arrayOf(MediaStore.Images.Media.DATE_TAKEN),
-//                null,
-//                null,
-//                null
-//            )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null } ?: System.currentTimeMillis()
-//
-//            val dt = Date(dateTaken)
-//            val fmt = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(dt)
-//            val year = SimpleDateFormat("yyyy", Locale.US).format(dt)
-//            val month = SimpleDateFormat("MM", Locale.US).format(dt)
-//            val day = SimpleDateFormat("dd", Locale.US).format(dt)
-//            val newName = "${fmt}_${place}.jpg"
-//            val newRel = "DCIM/Camera/$year/$month/$day"
-//
-//            val cv = ContentValues().apply {
-//                put(MediaStore.Images.Media.DISPLAY_NAME, newName)
-//                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) put(MediaStore.Images.Media.RELATIVE_PATH, newRel)
-//            }
-//            contentResolver.update(uri, cv, null, null)
-//            Log.d(tag, "Renamed to $newName in $newRel")
-//        } catch (e: Exception) {
-//            Log.e(tag, "Failed to process $uri", e)
-//        }
-//    }
+    private fun showPermissionNotification(uri: Uri, securityEx: android.app.RecoverableSecurityException) {
+        try {
+            Log.d(tag, "=== Showing Permission Notification ===")
+            Log.d(tag, "URI: $uri")
+            Log.d(tag, "SecurityException: ${securityEx.message}")
+
+            // Store the permission request globally
+            pendingPermissionIntent = securityEx.userAction.actionIntent
+            pendingUri = uri
+
+            Log.d(tag, "Stored permission intent globally: $pendingPermissionIntent")
+
+            // Store the pending permission request for later handling
+            storePendingPermissionRequest(uri, securityEx)
+
+            // Create an intent that will launch the permission dialog
+            val permissionIntent = Intent(this, MainActivity::class.java).apply {
+                action = "REQUEST_PERMISSION"
+                putExtra("URI", uri.toString())
+                putExtra("TIMESTAMP", System.currentTimeMillis())
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                PERMISSION_REQUEST_NOTIFICATION_ID,
+                permissionIntent,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                } else {
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                }
+            )
+
+            // Use the high-importance channel for permission notifications
+            val channelId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                "permission_channel"
+            } else {
+                "photo_organizer_channel"
+            }
+
+            val notification = NotificationCompat.Builder(this, channelId)
+                .setContentTitle("📸 Photo Rename Permission")
+                .setContentText("Tap to allow renaming of camera photos")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)  // Use system icon for visibility
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)  // Sound, vibration, lights
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOngoing(false)  // Make sure it's not ongoing
+                .setTimeoutAfter(30000)  // Auto-dismiss after 30 seconds
+                .build()
+
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            // Check if notifications are enabled
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val areNotificationsEnabled = notificationManager.areNotificationsEnabled()
+                Log.d(tag, "Notifications enabled: $areNotificationsEnabled")
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val channel = notificationManager.getNotificationChannel("permission_channel")
+                    Log.d(tag, "Channel importance: ${channel?.importance}")
+                    Log.d(tag, "Channel name: ${channel?.name}")
+                    Log.d(tag, "Channel description: ${channel?.description}")
+                }
+            }
+
+            // Clear any existing permission notifications first
+            notificationManager.cancel(PERMISSION_REQUEST_NOTIFICATION_ID)
+
+            // Post the new notification
+            notificationManager.notify(PERMISSION_REQUEST_NOTIFICATION_ID, notification)
+
+            Log.d(tag, "Permission notification posted with ID: $PERMISSION_REQUEST_NOTIFICATION_ID")
+            Log.d(tag, "=== End Permission Notification ===")
+
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to show permission notification", e)
+
+            // Fallback: try a simple test notification
+            try {
+                val testNotification = NotificationCompat.Builder(this, "photo_organizer_channel")
+                    .setContentTitle("Test Notification")
+                    .setContentText("If you see this, notifications work")
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .build()
+
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.notify(9999, testNotification)
+                Log.d(tag, "Test notification sent")
+            } catch (testEx: Exception) {
+                Log.e(tag, "Even test notification failed", testEx)
+            }
+        }
+    }
+
+    private fun storePendingPermissionRequest(uri: Uri, securityEx: android.app.RecoverableSecurityException) {
+        // Store the permission request in shared preferences for later retrieval
+        val prefs = getSharedPreferences("pending_permissions", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("pending_uri", uri.toString())
+            .putString("pending_action", securityEx.userAction.actionIntent.toString())
+            .putLong("pending_time", System.currentTimeMillis())
+            .apply()
+        Log.d(tag, "Stored pending permission request for $uri")
+    }
 
     private fun getPathFromDataColumn(uri: Uri): String? {
         return contentResolver.query(
